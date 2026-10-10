@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -20,6 +21,16 @@ import zipfile
 
 def artifact_suffix():
     return os.environ["GITHUB_RUN_ATTEMPT"]
+
+def artifact_name(name):
+    return os.environ.get("POCOCC_CI_ARTIFACT_PREFIX", "") + name + "-" + artifact_suffix()
+
+
+def positive_setting(name, fallback):
+    value = int(os.environ.get(name, str(fallback)))
+    if value <= 0:
+        raise RuntimeError(f"{name} must be positive")
+    return value
 
 
 class GithubRedirect(urllib.request.HTTPRedirectHandler):
@@ -63,7 +74,7 @@ def wait_artifact(name, filename, timeout):
                         return bundle.read(filename)
         except (urllib.error.URLError, OSError):
             pass
-        time.sleep(3)
+        time.sleep(positive_setting("POCOCC_CI_POLL_INTERVAL", 3))
     raise RuntimeError(f"Timed out waiting for artifact {name}/{filename}")
 
 
@@ -113,14 +124,33 @@ def stop(state):
 
 
 def seed_binary(name):
-    return str(Path("seed", name).resolve())
+    return str(Path(os.environ.get("POCOCC_CI_BINARY_DIR", "seed"), name).resolve())
+
+def configure_compiler_commands(state, compiler):
+    """只允许配置的工具链驱动，兼容 distccd 对非 /usr/bin 绝对路径的限制。"""
+    executable = shutil.which(compiler)
+    if executable is None:
+        raise RuntimeError(f"Compiler not found: {compiler}")
+    driver = Path(executable).absolute()
+    commands = [driver]
+    peer_name = driver.name.replace("clang++", "clang").replace("g++", "gcc")
+    peer = driver.with_name(peer_name)
+    if peer != driver and peer.is_file() and os.access(peer, os.X_OK):
+        commands.append(peer)
+    whitelist = state / "compiler-commands"
+    whitelist.write_text("".join(str(command) + "\n" for command in commands))
+    whitelist.chmod(0o600)
+    os.environ["DISTCC_CMDLIST"] = str(whitelist)
+    os.environ["DISTCC_CMDLIST_NUMWORDS"] = "1"
+    return commands
 
 
 def worker(options):
     state = options.state.resolve()
     state.mkdir(parents=True, exist_ok=True)
     public_key = wait_artifact(
-        f"coordinator-key-{artifact_suffix()}", "coordinator.pub", timeout=600
+        artifact_name("coordinator-key"), "coordinator.pub",
+        timeout=positive_setting("POCOCC_CI_RENDEZVOUS_TIMEOUT", 600)
     ).decode().strip()
     if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\n]+)?", public_key):
         raise RuntimeError("Invalid coordinator public key")
@@ -150,10 +180,12 @@ def worker(options):
         check=True,
     )
     wait_port(ssh_port, 10)
+    configure_compiler_commands(state, os.environ["CI_COMPILER"])
     start(
         state, "worker",
         [seed_binary("pococc"), "worker", "--listen", "127.0.0.1", "--allow", "127.0.0.1",
-         "--port", str(compile_port), "--jobs", "2", "--compiler", os.environ["CI_COMPILER"]],
+         "--port", str(compile_port), "--jobs", str(positive_setting("POCOCC_CI_WORKER_SLOTS", 2)),
+         "--compiler", os.environ["CI_COMPILER"]],
     )
     wait_port(compile_port, 10)
     hostname = None
@@ -194,7 +226,7 @@ def worker(options):
         "username": identity,
         "host_key": host_key.with_suffix(".pub").read_text().strip(),
         "compiler_version": compiler_version,
-        "slots": 2,
+        "slots": positive_setting("POCOCC_CI_WORKER_SLOTS", 2),
         "compile_port": compile_port,
         "run_id": os.environ["GITHUB_RUN_ID"],
     }
@@ -209,7 +241,8 @@ def connect(options):
     hosts = []
     for number in range(1, options.workers + 1):
         endpoint = json.loads(wait_artifact(
-            f"worker-endpoint-{number}-{artifact_suffix()}", "endpoint.json", timeout=600
+            artifact_name(f"worker-endpoint-{number}"), "endpoint.json",
+            timeout=positive_setting("POCOCC_CI_RENDEZVOUS_TIMEOUT", 600)
         ))
         if endpoint["run_id"] != os.environ["GITHUB_RUN_ID"] or endpoint["worker"] != number:
             raise RuntimeError("Worker endpoint belongs to a different run or worker")
@@ -267,8 +300,8 @@ def connect(options):
 
 
 def hold(options):
-    deadline = time.monotonic() + 900
-    marker = f"coordinator-finished-{artifact_suffix()}"
+    deadline = time.monotonic() + positive_setting("POCOCC_CI_HOLD_TIMEOUT", 900)
+    marker = artifact_name("coordinator-finished")
     while time.monotonic() < deadline:
         processes = json.loads((options.state / "processes.json").read_text())
         for process in processes:
@@ -282,7 +315,7 @@ def hold(options):
                 return
         except urllib.error.URLError:
             pass
-        time.sleep(3)
+        time.sleep(positive_setting("POCOCC_CI_POLL_INTERVAL", 3))
     raise RuntimeError("Coordinator did not publish its completion marker")
 
 

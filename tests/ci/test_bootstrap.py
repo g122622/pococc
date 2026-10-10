@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +18,34 @@ SPEC.loader.exec_module(BOOTSTRAP)
 
 
 class BootstrapTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("clang++"), "Requires Clang")
+    def test_worker_whitelist_only_contains_configured_toolchain(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ):
+            state = Path(temporary)
+            compiler = Path(shutil.which("clang++")).absolute()
+            commands = BOOTSTRAP.configure_compiler_commands(state, str(compiler))
+            self.assertEqual(commands[0], compiler)
+            self.assertEqual(Path(os.environ["DISTCC_CMDLIST"]).read_text().splitlines(),
+                             [str(command) for command in commands])
+            self.assertEqual(os.environ["DISTCC_CMDLIST_NUMWORDS"], "1")
+            self.assertTrue(all(command.parent == compiler.parent for command in commands))
+            with self.assertRaises(RuntimeError):
+                BOOTSTRAP.configure_compiler_commands(state, "/missing/compiler")
+
+    def test_external_workflow_configuration(self):
+        with patch.dict(os.environ, {
+            "GITHUB_RUN_ATTEMPT": "2", "POCOCC_CI_ARTIFACT_PREFIX": "pococc-",
+            "POCOCC_CI_BINARY_DIR": "/tmp/pococc-tools/seed",
+            "POCOCC_CI_POLL_INTERVAL": "60", "POCOCC_CI_HOLD_TIMEOUT": "19200",
+        }):
+            self.assertEqual(BOOTSTRAP.artifact_name("coordinator-key"), "pococc-coordinator-key-2")
+            self.assertEqual(BOOTSTRAP.seed_binary("pococc"), "/tmp/pococc-tools/seed/pococc")
+            self.assertEqual(BOOTSTRAP.positive_setting("POCOCC_CI_POLL_INTERVAL", 3), 60)
+            self.assertEqual(BOOTSTRAP.positive_setting("POCOCC_CI_HOLD_TIMEOUT", 900), 19200)
+            with patch.dict(os.environ, {"POCOCC_CI_HOLD_TIMEOUT": "0"}):
+                with self.assertRaises(RuntimeError):
+                    BOOTSTRAP.positive_setting("POCOCC_CI_HOLD_TIMEOUT", 900)
+
     def test_redirect_strips_credentials_only_across_hosts(self):
         handler = BOOTSTRAP.GithubRedirect()
         request = urllib.request.Request(
