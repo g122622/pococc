@@ -1,0 +1,4 @@
+/build*/
+.vscode/
+*.tsv
+__pycache__/
