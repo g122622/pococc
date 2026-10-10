@@ -113,6 +113,8 @@ jobs:
         with:
           name: bootstrap-result-${{ github.run_attempt }}
           path: |
+            build-bootstrap/pococc
+            build-bootstrap/pococc-cc
             build-bootstrap/bootstrap.tsv
             build-bootstrap/bootstrap.json
             build-bootstrap/Testing/Temporary/LastTest.log
