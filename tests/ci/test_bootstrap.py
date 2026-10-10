@@ -17,6 +17,20 @@ SPEC.loader.exec_module(BOOTSTRAP)
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_external_workflow_configuration(self):
+        with patch.dict(os.environ, {
+            "GITHUB_RUN_ATTEMPT": "2", "POCOCC_CI_ARTIFACT_PREFIX": "pococc-",
+            "POCOCC_CI_BINARY_DIR": "/tmp/pococc-tools/seed",
+            "POCOCC_CI_POLL_INTERVAL": "60", "POCOCC_CI_HOLD_TIMEOUT": "19200",
+        }):
+            self.assertEqual(BOOTSTRAP.artifact_name("coordinator-key"), "pococc-coordinator-key-2")
+            self.assertEqual(BOOTSTRAP.seed_binary("pococc"), "/tmp/pococc-tools/seed/pococc")
+            self.assertEqual(BOOTSTRAP.positive_setting("POCOCC_CI_POLL_INTERVAL", 3), 60)
+            self.assertEqual(BOOTSTRAP.positive_setting("POCOCC_CI_HOLD_TIMEOUT", 900), 19200)
+            with patch.dict(os.environ, {"POCOCC_CI_HOLD_TIMEOUT": "0"}):
+                with self.assertRaises(RuntimeError):
+                    BOOTSTRAP.positive_setting("POCOCC_CI_HOLD_TIMEOUT", 900)
+
     def test_redirect_strips_credentials_only_across_hosts(self):
         handler = BOOTSTRAP.GithubRedirect()
         request = urllib.request.Request(
