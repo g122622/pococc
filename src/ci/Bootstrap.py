@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -125,6 +126,24 @@ def stop(state):
 def seed_binary(name):
     return str(Path(os.environ.get("POCOCC_CI_BINARY_DIR", "seed"), name).resolve())
 
+def configure_compiler_commands(state, compiler):
+    """只允许配置的工具链驱动，兼容 distccd 对非 /usr/bin 绝对路径的限制。"""
+    executable = shutil.which(compiler)
+    if executable is None:
+        raise RuntimeError(f"Compiler not found: {compiler}")
+    driver = Path(executable).absolute()
+    commands = [driver]
+    peer_name = driver.name.replace("clang++", "clang").replace("g++", "gcc")
+    peer = driver.with_name(peer_name)
+    if peer != driver and peer.is_file() and os.access(peer, os.X_OK):
+        commands.append(peer)
+    whitelist = state / "compiler-commands"
+    whitelist.write_text("".join(str(command) + "\n" for command in commands))
+    whitelist.chmod(0o600)
+    os.environ["DISTCC_CMDLIST"] = str(whitelist)
+    os.environ["DISTCC_CMDLIST_NUMWORDS"] = "1"
+    return commands
+
 
 def worker(options):
     state = options.state.resolve()
@@ -161,6 +180,7 @@ def worker(options):
         check=True,
     )
     wait_port(ssh_port, 10)
+    configure_compiler_commands(state, os.environ["CI_COMPILER"])
     start(
         state, "worker",
         [seed_binary("pococc"), "worker", "--listen", "127.0.0.1", "--allow", "127.0.0.1",
