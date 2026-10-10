@@ -34,5 +34,7 @@ if(BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_distributed.py
             --pococc $<TARGET_FILE:pococc> --launcher $<TARGET_FILE:pococc-cc>)
     set_tests_properties(integration PROPERTIES TIMEOUT 120)
+    add_test(NAME bootstrap_evidence
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/test_bootstrap.py)
 endif()
 install(TARGETS pococc pococc-cc RUNTIME DESTINATION bin)

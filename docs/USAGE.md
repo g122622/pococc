@@ -56,7 +56,7 @@ cmake -S src/examples/hello -B build-hello -G Ninja \
 
 为每个 worker 安装兼容工具链，并通过可互通的 TCP 或覆盖网络连接。worker 上使用 --listen 指定本机网络地址，--allow 指定协调节点的地址或明确的网络范围。协调节点用 --hosts 提供这些地址。
 
-worker 和协调构建必须同时运行；结束、失败或取消后由外部环境终止 worker。当前不自动启动 GitHub job、不配置 VPN、不提供自动注册。TODO: 增加环境适配器和节点生命周期管理。
+worker 和协调构建必须同时运行；结束、失败或取消后由外部环境终止 worker。仓库的 bootstrap workflow 提供 GitHub Actions 双 worker 自举适配器；核心 CLI 仍使用显式节点，不自动启动 GitHub job。TODO: 增加通用集群管理和覆盖网络适配器。
 
 普通 distcc 不需要 worker checkout 业务源码，但编译器名称、路径、版本与目标必须兼容。显式传入 --compiler 只检查 worker 程序并调整 PATH，尚不自动交换客户端与 worker 的版本指纹。
 
@@ -114,4 +114,14 @@ strict 关闭 distcc 通信错误回退，并关闭远程编译错误的本地�
 - 本地编译有跨进程槽位锁。不同构建共用默认目录时共享该限制，可用 POCOCC_STATE_DIR 隔离。
 - stats 汇总 local 和 distcc_submissions、失败与原因；累计任务时间不是墙钟时间。
 - journal 采用 flock 防止并行记录交错。journal 失败会告警，不覆盖编译器退出码。
-- TODO: 远程 PCH、modules、输入缓存、动态调度、Icecream 后端与 GitHub Actions 集群管理尚未实现。
+- TODO: 远程 PCH、modules、输入缓存、动态调度、Icecream 后端与通用集群管理尚未实现。
+
+## GitHub Actions 分布式自举
+
+Distributed Bootstrap workflow 由 push、PR 或手动触发。seed job 用普通 Clang 18 构建 stage 0；随后 coordinator 与两个 worker job 同时启动。
+
+coordinator 在当前 run 生成 SSH 密钥，只上传公钥。worker 运行仅监听环回地址的 distccd，并通过临时 Quick Tunnel 提供 SSH 入口。coordinator 校验 worker 主机公钥、比较工具链版本，然后建立经过认证的端口转发。
+
+stage 1 在独立 build-bootstrap 目录中构建，compiler launcher 指向 stage 0 的 pococc-cc。CI 强制全部编译单元经严格 distcc 执行，核对 journal 与两个 worker 的实际 COMPILE_OK 记录，并运行 stage 1 的完整测试。
+
+产物包含自举统计、worker 报告和日志。该方案验证多 runner 自举，不承诺加速；临时隧道依赖外部服务。TODO: 替换为持久覆盖网络并扩大节点数量。

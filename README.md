@@ -9,6 +9,7 @@ pococc/
 ├── src/                    # 实现源码和头文件
 │   ├── main.cpp            # 两个程序共享的入口
 │   ├── pococc/             # 编译、系统进程、集群配置与统计子系统
+│   ├── ci/                 # GitHub Actions 自举与临时隧道适配器
 │   └── examples/hello/     # 可独立构建的 CMake 示例源码
 ├── tests/                  # 参数契约与真实双 worker 集成验证
 ├── docs/USAGE.md            # 构建、worker、launcher 与 ccache 使用指南
@@ -30,4 +31,5 @@ Ninja/Make 继续管理依赖和最终链接，pococc-cc 接收真实编译器�
 - 节点必须互通并安装兼容工具链。严格模式默认开启；正常本地任务仍允许执行，远端失败不会被隐藏重试。
 - PCH、modules、native CPU、插件及未验证参数保持本地执行。TODO: 扩大经过验证的远程输入能力，增加 Icecream 后端。
 - 日志中的 distcc_submissions 是提交数；需要严格模式、doctor 和 worker 日志确认实际远端执行。
-- TODO: GitHub Actions 节点发现、组网、注册和自动退出适配器尚未实现；当前用显式地址和前台 worker。
+- GitHub Actions 自举通过临时 SSH 隧道连接两个独立 worker，无需预配置 Secret；源码中的 CI 适配器与核心分离。
+- TODO: 通用动态集群注册、持久覆盖网络和自动伸缩尚未实现。

@@ -112,6 +112,7 @@ def main():
                 'add_executable(sample main.cpp ' + " ".join(sources) + ' "${CMAKE_CURRENT_BINARY_DIR}/generated.hpp")\n'
                 'target_include_directories(sample PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")\n'
                 'target_link_libraries(sample PRIVATE pch)\n'
+                'target_compile_options(sample PRIVATE -Wall -Wextra -Wpedantic -Werror)\n'
             )
             checked(
                 ["cmake", "-S", str(project), "-B", str(build), "-G", "Ninja",

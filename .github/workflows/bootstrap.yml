@@ -1,0 +1,192 @@
+name: Distributed Bootstrap
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_COMPILER: /usr/bin/clang++-18
+  CLOUDFLARED_VERSION: 2026.10.0
+  CLOUDFLARED_SHA256: d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db
+
+jobs:
+  seed:
+    name: Build stage 0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y clang-18 ninja-build distcc ccache
+      - name: Build and test seed
+        run: |
+          cmake -S . -B build-seed -G Ninja -DCMAKE_CXX_COMPILER="$CI_COMPILER" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+          cmake --build build-seed -j4
+          ctest --test-dir build-seed --output-on-failure
+      - name: Prepare seed binaries and tunnel tool
+        run: |
+          mkdir -p seed
+          cp build-seed/pococc build-seed/pococc-cc seed/
+          curl -fL --retry 3 --max-time 180 \
+            "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64" \
+            -o seed/cloudflared
+          printf '%s  %s\n' "$CLOUDFLARED_SHA256" seed/cloudflared | sha256sum --check
+          chmod +x seed/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed-${{ github.run_attempt }}
+          path: seed/
+          retention-days: 1
+
+  coordinator:
+    name: Bootstrap coordinator
+    needs: seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed-${{ github.run_attempt }}
+          path: seed
+      - name: Install coordinator tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang-18 ninja-build distcc ccache openssh-client
+          chmod +x seed/*
+      - name: Generate coordinator SSH key
+        run: |
+          mkdir -p "$RUNNER_TEMP/pococc-auth" rendezvous
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/pococc-auth/id"
+          cp "$RUNNER_TEMP/pococc-auth/id.pub" rendezvous/coordinator.pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coordinator-key-${{ github.run_attempt }}
+          path: rendezvous/coordinator.pub
+          retention-days: 1
+      - name: Connect workers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 src/ci/Bootstrap.py connect --workers 2 --state "$RUNNER_TEMP/pococc-coordinator"
+      - name: Build stage 1 through stage 0
+        run: |
+          cmake -S . -B build-bootstrap -G Ninja -DCMAKE_CXX_COMPILER="$CI_COMPILER" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/seed/pococc-cc"
+          seed/pococc doctor --hosts "$POCOCC_CI_HOSTS" --compiler "$CI_COMPILER"
+          seed/pococc run --hosts "$POCOCC_CI_HOSTS" --strict --local-jobs 2 --preprocess-jobs 2 \
+            --journal "$GITHUB_WORKSPACE/build-bootstrap/bootstrap.tsv" \
+            -- cmake --build build-bootstrap -j4
+          seed/pococc stats build-bootstrap/bootstrap.tsv
+          python3 src/ci/Bootstrap.py verify-build --build build-bootstrap
+      - name: Verify stage 1
+        run: |
+          build-bootstrap/pococc --version
+          ctest --test-dir build-bootstrap --output-on-failure
+      - name: Publish completion marker
+        if: always()
+        run: |
+          mkdir -p completion
+          printf '%s\n' '${{ job.status }}' > completion/status.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coordinator-finished-${{ github.run_attempt }}
+          path: completion/status.txt
+          retention-days: 1
+      - name: Close coordinator tunnels
+        if: always()
+        run: python3 src/ci/Bootstrap.py stop --state "$RUNNER_TEMP/pococc-coordinator"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-result-${{ github.run_attempt }}
+          path: |
+            build-bootstrap/bootstrap.tsv
+            build-bootstrap/bootstrap.json
+            build-bootstrap/Testing/Temporary/LastTest.log
+            ${{ runner.temp }}/pococc-coordinator/*.log
+          retention-days: 3
+
+  workers:
+    name: Compile worker ${{ matrix.worker }}
+    needs: seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed-${{ github.run_attempt }}
+          path: seed
+      - name: Install worker tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang-18 distcc openssh-server
+          sudo mkdir -p /run/sshd
+          chmod +x seed/*
+      - name: Start authenticated worker tunnel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 src/ci/Bootstrap.py worker --worker '${{ matrix.worker }}' \
+            --state "$RUNNER_TEMP/pococc-worker"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-endpoint-${{ matrix.worker }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pococc-worker/endpoint.json
+          retention-days: 1
+      - name: Keep worker available until coordinator finishes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 src/ci/Bootstrap.py hold --state "$RUNNER_TEMP/pococc-worker"
+      - name: Stop worker services
+        if: always()
+        run: python3 src/ci/Bootstrap.py stop --state "$RUNNER_TEMP/pococc-worker"
+      - name: Verify actual self-compilation on worker
+        run: python3 src/ci/Bootstrap.py verify-worker --state "$RUNNER_TEMP/pococc-worker"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: worker-report-${{ matrix.worker }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pococc-worker/report.json
+            ${{ runner.temp }}/pococc-worker/*.log
+          retention-days: 3
+
+  verify:
+    name: Verify distributed bootstrap evidence
+    needs: [coordinator, workers]
+    runs-on: ubuntu-24.04
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-result-${{ github.run_attempt }}
+          path: evidence/bootstrap
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'worker-report-*-${{ github.run_attempt }}'
+          path: evidence
+      - name: Verify all jobs and remote compile counts
+        env:
+          COORDINATOR_RESULT: ${{ needs.coordinator.result }}
+          WORKER_RESULT: ${{ needs.workers.result }}
+        run: python3 src/ci/Bootstrap.py verify-evidence --directory evidence

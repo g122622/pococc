@@ -6,6 +6,7 @@
 src/
 ├── main.cpp       # 统一参数入口和退出码
 ├── pococc/        # 核心子系统
+├── ci/            # GitHub Actions 自举环境适配器
 └── examples/      # 独立示例源码
 ```
 

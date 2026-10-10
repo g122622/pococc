@@ -19,3 +19,4 @@ application 调用门面；门面使用 arguments、cluster、system 和 telemet
 - 默认禁用 distcc 通信失败回退和远程编译错误本地重试；fallback 模式显式开启。
 - 本地编译使用进程间 flock 槽位；默认目录按用户共享，可用 POCOCC_STATE_DIR 隔离。
 - journal 写入失败会告警，编译退出码保持原值。
+- Clang 的 distcc 调用额外关闭 GNU 行标记诊断，避免预处理文件在 pedantic/Werror 下误报。

@@ -9,5 +9,5 @@
 - 各源码目录 README 保留目录树、模块关系、外部依赖和容易踩的坑；使用指南放在 docs/USAGE.md。
 - 使用仓库 .clang-format；编译使用 -Wall -Wextra -Wpedantic -Werror。
 - Linux 构建：cmake --preset linux-debug，然后 cmake --build --preset linux-debug；验证使用 ctest --preset linux-debug。
-- 在 Windows 上通过 Ubuntu WSL 构建。不得启动 GitHub workflow；不得启动子代理。
-- 修改保留用户工作区内容；不自动提交或推送。
+- 在 Windows 上通过 Ubuntu WSL 构建；不得启动子代理。
+- 修改保留用户工作区内容；用户明确要求时可以提交、推送和运行 GitHub workflow。

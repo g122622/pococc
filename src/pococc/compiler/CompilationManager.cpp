@@ -156,6 +156,8 @@ Result<int> CompilationManager::compile(
         }
         command = expanded.value();
         command.front() = compiler.value();
+        // distcc 的预处理输出含 GNU 行标记；Clang pedantic 会误报工具生成的指令。
+        if (name.starts_with("clang")) command.push_back("-Wno-gnu-line-marker");
         command.insert(command.begin(), backend.value());
         route = "distcc";
         Logger::info("Submitting " + invocation.source + " to distcc");
